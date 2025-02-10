@@ -7,7 +7,6 @@ import (
 	"net"
 	"regexp"
 	"strings"
-	"time"
 )
 
 type AUTH struct {
@@ -76,19 +75,18 @@ func (client *RTSP) Connect(port string) bool {
 
 	client.Cseq = 0
 	client.Data = ""
-	retry := 0
 	if !client.IsConnected() {
-		socket, err := net.DialTimeout("tcp", net.JoinHostPort(client.Ip, client.Port), time.Duration(time.Second*time.Duration(client.Timeout)))
+		socket, err := net.Dial("tcp", net.JoinHostPort(client.Ip, client.Port))
 		if err != nil {
 			fmt.Println(err)
-			retry += 1
-			time.Sleep(time.Millisecond)
+			return false
 		}
 
 		if socket != nil {
 			client.Socket = socket
 
 		}
+
 		client.Status = 1
 		return true
 
@@ -202,37 +200,50 @@ func (client *RTSP) GetRTSPUrl() string {
 	return ""
 }
 func (client *RTSP) Authorize(creds string, route string) bool {
-	if client.IsConnected() {
+	if client.IsConnected() && client.Socket != nil {
+		var err error
+		//client.Socket, err = net.DialTimeout("tcp", net.JoinHostPort(client.Ip, client.Port), time.Second*5)
+
+		if err != nil {
+			fmt.Println("TEMPO ", err)
+			return false
+		}
 		auth_str := ""
 
 		client.Cseq += 1
-		ReadBuf := make([]byte, 1024)
-		_, err := client.Socket.Write(client.Describe(auth_str))
-		if err != nil {
-			fmt.Println(err)
+		if client.Socket != nil {
+			ReadBuf := make([]byte, 1024)
+			_, err = client.Socket.Write(client.Describe(auth_str))
+			if err != nil {
+				return false
+			}
+			client.Socket.Read(ReadBuf)
+			client.Data = string(ReadBuf)
+			client.CheckAuth()
+
+			client.Realm = client.FindRealm()
+			client.Nonce = client.FindNonce()
+
+			if client.Auth.Method == "Basic" {
+				creds := client.Auth.Username + ":" + client.Auth.Password
+				auth_str = client.BasicAuth(creds)
+
+			} else if client.Auth.Method == "Digest" {
+				auth_str = client.DigestAuth("DESCRIBE", route)
+			}
+
+			_, err = client.Socket.Write(client.Describe(auth_str))
+			if err != nil {
+				fmt.Println(err)
+			}
+			client.Socket.Read(ReadBuf)
+			client.Socket.Close()
+			return true
+		} else {
+			client.Socket.Close()
+			return false
 		}
-		client.Socket.Read(ReadBuf)
-		client.Data = string(ReadBuf)
-		client.CheckAuth()
 
-		client.Realm = client.FindRealm()
-		client.Nonce = client.FindNonce()
-
-		if client.Auth.Method == "Basic" {
-			creds := client.Auth.Username + ":" + client.Auth.Password
-			auth_str = client.BasicAuth(creds)
-
-		} else if client.Auth.Method == "Digest" {
-			auth_str = client.DigestAuth("DESCRIBE", route)
-		}
-
-		_, err = client.Socket.Write(client.Describe(auth_str))
-		if err != nil {
-			fmt.Println(err)
-		}
-		client.Socket.Read(ReadBuf)
-
-		return true
 	} else {
 		return false
 	}

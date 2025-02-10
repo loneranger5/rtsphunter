@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+
 	"os"
 	"rtspranger/src/modules"
 	"strings"
+	"sync"
 
 	"github.com/devchat-ai/gopool"
 )
@@ -21,25 +23,61 @@ func Raw_Connect(target string) bool {
 	if client.Connect("554") {
 
 		cre := client.Auth.Username + ":" + client.Auth.Password
-		client.Authorize(cre, routes[1])
-		if client.OkAuth() {
-			client.Socket.Close()
-			return true
-		} else {
-			client.Socket.Close()
+		if client.Authorize(cre, routes[1]) {
+			if client.OkAuth() {
 
-			return false
+				return true
+			} else {
+
+				return false
+			}
 		}
+
 	}
-	client.Socket.Close()
 
 	return false
 }
+
+func Operation(target string, output *os.File) {
+	var mutex sync.Mutex
+	fmt.Println("Trying ", target)
+
+	if Raw_Connect(target) {
+		auth := modules.AUTH{Username: "", Password: ""}
+		client := modules.CreateRTSPClient(target, "554", 5, auth)
+
+		cre := client.Auth.Username + ":" + client.Auth.Password
+		if client.Connect("554") {
+			for _, route := range routes {
+				if client.Status == 1 && client.Socket != nil {
+					if client.Authorize(cre, route) {
+						if client.OkRoute(route) {
+							mutex.Lock()
+							fmt.Println("R okay ", cre, route, client.GetRTSPUrl())
+							output.WriteString(client.GetRTSPUrl() + "\n")
+
+							mutex.Unlock()
+							break
+						}
+					}
+
+				}
+			}
+		}
+		if client.Socket != nil {
+			client.Socket.Close()
+		}
+
+	}
+}
 func main() {
-	fmt.Println("Hello world")
 
 	var file string
-
+	out_file, err := os.Create("lines.txt")
+	if err != nil {
+		fmt.Println(err)
+		out_file.Close()
+	}
 	flag.StringVar(&file, "file", "", "")
 	flag.Parse()
 
@@ -51,81 +89,14 @@ func main() {
 		fmt.Println("Unable to read input file... ")
 		panic(err)
 	}
-	online := 0
 
-	pool := gopool.NewGoPool(500)
+	pool := gopool.NewGoPool(300)
 	defer pool.Release()
 
 	for _, target := range lines {
 
 		pool.AddTask(func() (interface{}, error) {
-			if Raw_Connect(target) {
-				fmt.Println("Tryinmg", target)
-
-				auth := modules.AUTH{Username: "", Password: ""}
-				client := modules.CreateRTSPClient(target, "554", 5, auth)
-				if client.Connect("554") {
-
-					cre := client.Auth.Username + ":" + client.Auth.Password
-
-					for _, route := range routes {
-						if client.Status == 1 && client.Socket != nil {
-							client.Authorize(cre, route)
-
-							if client.OkRoute(route) {
-								fmt.Println("R okay ", cre, route, client.GetRTSPUrl())
-								online += 1
-								break
-							}
-
-						}
-					}
-				}
-
-			} else {
-				cred_ok := false
-				for _, cred := range creds {
-
-					if !cred_ok {
-						username, password := strings.Split(cred, ":")[0], strings.Split(cred, ":")[1]
-						if len(password) <= 0 {
-							password = ""
-						}
-						auth := modules.AUTH{Username: username, Password: password}
-						client := modules.CreateRTSPClient(target, "554", 10, auth)
-
-						if client.Connect("554") {
-							for _, route := range routes {
-								fmt.Println("Tryinmg", target, cred, route)
-
-								if client.Status == 1 && client.Socket != nil {
-
-									cre := client.Auth.Username + ":" + client.Auth.Password
-									client.Authorize(cre, route)
-
-									if client.OkAuth() {
-										if client.OkRoute(route) {
-											fmt.Println("R okay ", cre, route, client.GetRTSPUrl())
-											online += 1
-											cred_ok = true
-
-											break
-										}
-									}
-
-								}
-
-							}
-						}
-						client.Socket.Close()
-
-					} else {
-						break
-
-					}
-
-				}
-			}
+			Operation(target, out_file)
 
 			return nil, nil
 		})
